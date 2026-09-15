@@ -13,7 +13,13 @@ export { API_BASE };
  * @returns {Error} 附带 status 属性的错误对象
  */
 function responseError(response, data) {
-  const err = new Error(data.detail || `请求失败: ${response.status}`);
+  // FastAPI 422 校验错误的 detail 是对象数组（[{loc, msg, type}, ...]），
+  // 直接传给 Error 构造器会显示 "[object Object]"
+  let detail = data.detail;
+  if (typeof detail !== "string" && detail !== undefined && detail !== null) {
+    detail = JSON.stringify(detail);
+  }
+  const err = new Error(detail || `请求失败: ${response.status}`);
   err.status = response.status;
   return err;
 }

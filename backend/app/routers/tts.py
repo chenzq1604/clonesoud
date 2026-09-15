@@ -134,6 +134,10 @@ async def generate_tts(data: TTSRequest, db: AsyncSession = Depends(get_db)):
     if not speaker_id:
         raise HTTPException(status_code=400, detail="音色尚未准备就绪，请先选择或克隆音色")
 
+    # 防重入：合成进行中拒绝重复提交，避免并发写同一临时 WAV 与产物
+    if project.tts_status == "generating":
+        raise HTTPException(status_code=409, detail="语音正在合成中，请等待完成")
+
     project.tts_status = "generating"
     project.tts_text = data.text
     await db.commit()

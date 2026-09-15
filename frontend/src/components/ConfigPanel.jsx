@@ -80,19 +80,23 @@ function ConfigPanel({ open, onClose }) {
   /** 更新表单字段 */
   const setField = (field, value) => setForm((f) => ({ ...f, [field]: value }));
 
-  /** 保存配置：只提交有值/变更的字段，密钥留空不提交 */
+  /** 保存配置：密钥留空不提交；URL 类字段始终提交当前值（空串 = 清除） */
   const handleSave = async () => {
+    if (saving) return;
     setSaving(true);
     setMessage("");
     setError("");
     try {
       const body = {};
       if (form.ark_api_key.trim()) body.ark_api_key = form.ark_api_key.trim();
+      // image_model 后端约束非空（min_length=1），留空时不提交
       if (form.image_model.trim()) body.image_model = form.image_model.trim();
-      if (form.http_proxy.trim()) body.http_proxy = form.http_proxy.trim();
-      if (form.comfyui_base_url.trim()) body.comfyui_base_url = form.comfyui_base_url.trim();
+      // URL 类字段始终提交（含空串）：后端支持空串清除配置，
+      // 若仅在非空时提交，用户清空代理/服务地址后保存不生效
+      body.http_proxy = form.http_proxy.trim();
+      body.comfyui_base_url = form.comfyui_base_url.trim();
+      body.cosyvoice_base_url = form.cosyvoice_base_url.trim();
       if (form.comfyui_timeout) body.comfyui_timeout = Number(form.comfyui_timeout);
-      if (form.cosyvoice_base_url.trim()) body.cosyvoice_base_url = form.cosyvoice_base_url.trim();
       if (form.cosyvoice_timeout) body.cosyvoice_timeout = Number(form.cosyvoice_timeout);
       body.demo_mode = form.demo_mode;
 

@@ -42,18 +42,21 @@ def download_file(path, size, retries=5):
         return
     part = dest + '.part'
     url = f'https://modelscope.cn/api/v1/models/{MODEL_ID}/repo'
-    headers = {}
-    if os.path.exists(part):
-        headers['Range'] = f'bytes={os.path.getsize(part)}-'
     for attempt in range(1, retries + 1):
         try:
+            # 断点续传：带上已有的 .part 文件大小请求 Range；
+            # 服务器可能忽略 Range 返回 200（全量内容），此时必须
+            # 覆盖写入而非追加，否则文件内容重复损坏
+            resume_from = os.path.getsize(part) if os.path.exists(part) else 0
+            headers = {'Range': f'bytes={resume_from}-'} if resume_from else {}
             with requests.get(
                 url, params={'Revision': REVISION, 'FilePath': path},
                 headers=headers, stream=True, timeout=(15, 120),
             ) as r:
                 r.raise_for_status()
-                mode = 'ab' if headers else 'wb'
-                downloaded = os.path.getsize(part) if headers else 0
+                partial = resume_from and r.status_code == 206
+                mode = 'ab' if partial else 'wb'
+                downloaded = resume_from if partial else 0
                 with open(part, mode) as f:
                     for chunk in r.iter_content(chunk_size=4 * 1024 * 1024):
                         f.write(chunk)

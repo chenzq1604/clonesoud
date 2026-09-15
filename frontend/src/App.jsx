@@ -39,15 +39,16 @@ function App() {
   const [configOpen, setConfigOpen] = useState(false);
   // 防止 React StrictMode 双调用 effect 时重复创建项目
   const initRef = useRef(false);
+  // 轮询进行中标记：单次请求慢于轮询间隔时跳过本次，避免请求堆叠
+  const pollingRef = useRef(false);
 
-  /** 创建新项目（成功后持久化 ID） */
+  /** 创建新项目（成功后持久化 ID；错误提示由调用方决定是否清除） */
   const createProject = async () => {
     try {
       const data = await api.createProject("音视频克隆项目");
       localStorage.setItem(PROJECT_STORAGE_KEY, data.id);
       setProjectId(data.id);
       setProject(data);
-      setError("");
     } catch (err) {
       setError(`创建项目失败: ${err.message}`);
     }
@@ -73,19 +74,24 @@ function App() {
 
   /** 轮询刷新项目状态 */
   const refreshProject = useCallback(async () => {
-    if (!projectId) return;
+    if (!projectId || pollingRef.current) return;
+    pollingRef.current = true;
     try {
       const data = await api.getProject(projectId);
       setProject(data);
+      setError("");
     } catch (err) {
       if (err.status === 404) {
         // 当前项目已不存在（如后端数据库被重置/清理），
         // 自动新建项目恢复可用，避免后续操作持续报错
+        // （提示在创建成功后再设置，否则会被创建流程清掉）
+        await createProject();
         setError("当前项目已失效，已自动创建新项目");
-        createProject();
         return;
       }
       setError(`刷新状态失败: ${err.message}`);
+    } finally {
+      pollingRef.current = false;
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId]);
@@ -104,9 +110,18 @@ function App() {
           setProjectId(data.id);
           setProject(data);
         })
-        .catch(() => {
-          localStorage.removeItem(PROJECT_STORAGE_KEY);
-          createProject();
+        .catch((err) => {
+          if (err.status === 404) {
+            // 项目确实已被删除：清除本地记录并新建
+            localStorage.removeItem(PROJECT_STORAGE_KEY);
+            createProject();
+          } else {
+            // 网络错误（后端尚未启动等）：保留原项目 ID 并激活轮询，
+            // 由 refreshProject 自动重连恢复；此时误创新项目会覆盖
+            // localStorage，导致旧项目（音色/产物都在后端）无法找回
+            setError("后端服务未就绪，正在等待连接恢复...");
+            setProjectId(existing);
+          }
         });
     } else {
       createProject();

@@ -59,9 +59,17 @@ async def download_url_to_file(
     """
     通过 httpx 异步下载远程文件到本地。
 
-    后端调用火山接口时已经配置代理，下载通常可直接复用该代理。
+    与方舟 API 客户端保持同一代理策略（显式配置代理且禁用环境代理）：
+    否则系统环境变量 HTTP_PROXY 会引入第二套代理，在代理进程未启动
+    时下载全部失败，行为随部署环境漂移。
     """
-    async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+    proxy = settings.http_proxy or None
+    async with httpx.AsyncClient(
+        timeout=timeout,
+        follow_redirects=True,
+        proxy=proxy,
+        trust_env=False,
+    ) as client:
         response = await client.get(url)
         response.raise_for_status()
         target_path.write_bytes(response.content)

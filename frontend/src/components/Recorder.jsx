@@ -30,18 +30,31 @@ function Recorder({ projectId, project, onStatusChange }) {
   const timerRef = useRef(null);
   const analyserRef = useRef(null);
   const animationRef = useRef(null);
+  const audioContextRef = useRef(null);
 
-  /** 停止录音 */
+  /** 停止录音（自动停止与手动停止可能几乎同时触发，二次 stop 会抛异常） */
   const stopRecording = () => {
-    if (!mediaRecorderRef.current) return;
-    mediaRecorderRef.current.stop();
+    const recorder = mediaRecorderRef.current;
+    if (!recorder || recorder.state === "inactive") return;
+    recorder.stop();
     setIsRecording(false);
     clearInterval(timerRef.current);
+  };
+
+  /** 关闭音量可视化使用的 AudioContext（浏览器限制页面约 6 个实例） */
+  const closeAudioContext = () => {
+    if (audioContextRef.current) {
+      audioContextRef.current.close().catch(() => {});
+      audioContextRef.current = null;
+    }
+    analyserRef.current = null;
   };
 
   /** 开始录音：请求麦克风权限并启动 MediaRecorder */
   const startRecording = async () => {
     try {
+      // 防御：上次录音的 AudioContext 未正常关闭时先回收
+      closeAudioContext();
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const mediaRecorder = new MediaRecorder(stream);
       mediaRecorderRef.current = mediaRecorder;
@@ -49,6 +62,7 @@ function Recorder({ projectId, project, onStatusChange }) {
 
       /** 音频可视化 */
       const audioContext = new AudioContext();
+      audioContextRef.current = audioContext;
       const source = audioContext.createMediaStreamSource(stream);
       const analyser = audioContext.createAnalyser();
       analyser.fftSize = 256;
@@ -64,6 +78,7 @@ function Recorder({ projectId, project, onStatusChange }) {
       mediaRecorder.onstop = () => {
         stream.getTracks().forEach((track) => track.stop());
         cancelAnimationFrame(animationRef.current);
+        closeAudioContext();
       };
 
       mediaRecorder.start(100);
@@ -79,10 +94,15 @@ function Recorder({ projectId, project, onStatusChange }) {
 
   /** 上传录制的音频到后端进行音色克隆 */
   const uploadRecording = async () => {
+    if (uploading) return; // 函数级守卫：按钮 disabled 有重渲染窗口
     if (audioChunksRef.current.length === 0) return;
 
-    const blob = new Blob(audioChunksRef.current, { type: "audio/webm" });
-    const file = new File([blob], "recording.webm", { type: "audio/webm" });
+    // 使用录音器实际输出的 MIME（Firefox 为 ogg、Safari 为 mp4），
+    // 硬编码 webm 会导致文件类型与真实字节不符
+    const mimeType = mediaRecorderRef.current?.mimeType || "audio/webm";
+    const ext = mimeType.includes("ogg") ? "ogg" : mimeType.includes("mp4") ? "m4a" : "webm";
+    const blob = new Blob(audioChunksRef.current, { type: mimeType });
+    const file = new File([blob], `recording.${ext}`, { type: mimeType });
 
     const formData = new FormData();
     formData.append("project_id", projectId);
@@ -95,6 +115,10 @@ function Recorder({ projectId, project, onStatusChange }) {
     try {
       const data = await api.uploadVoice(formData);
       setMessage("音色克隆已提交，请在下方查看状态。");
+      // 上传成功后清空本条录音：避免克隆完成后按钮仍可点击、
+      // 同一份录音被重复提交并覆盖项目音色
+      audioChunksRef.current = [];
+      setRecordedSeconds(0);
       if (onStatusChange) onStatusChange(data);
     } catch (err) {
       setMessage(`上传失败: ${err.message}`);
@@ -127,12 +151,19 @@ function Recorder({ projectId, project, onStatusChange }) {
     }
   }, [recordedSeconds, isRecording]);
 
-  /** 组件卸载时清理资源 */
+  /** 组件卸载时清理资源（切换项目时组件会重挂载） */
   useEffect(() => {
     return () => {
+      // 录音进行中卸载：停止录音器与麦克风轨道，避免麦克风持续占用
+      const recorder = mediaRecorderRef.current;
+      if (recorder && recorder.state !== "inactive") {
+        recorder.stop();
+      }
       clearInterval(timerRef.current);
       cancelAnimationFrame(animationRef.current);
+      closeAudioContext();
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const canUpload = !isRecording && recordedSeconds >= MIN_SECONDS && recordedSeconds <= MAX_SECONDS;

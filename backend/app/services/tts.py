@@ -251,24 +251,28 @@ async def synthesize_speech(
     wav_path = project_dir / "_tts_raw.wav"
     mp3_path = get_project_file_path(project_id, "tts.mp3")
 
-    if speaker_id.startswith(BUILTIN_PREFIX):
-        # 内置音色模式：传入预置音色名
-        builtin_spk = speaker_id[len(BUILTIN_PREFIX):]
-        await _call_cosyvoice_tts(text, builtin_spk, None, wav_path)
-    else:
-        # 克隆音色模式：以解析出的原始录音为参考
-        if not ref_audio_path or not Path(ref_audio_path).exists():
-            raise RuntimeError(
-                "克隆参考录音缺失（raw_recording.wav 不存在），请重新完成声音克隆"
-            )
-        # 兼容本地遗留数据：扩展名为 .wav 但内容实为 webm 等格式时，
-        # 就地转码修复，避免推理服务解码失败
-        ref_path = await ensure_reference_wav(Path(ref_audio_path))
-        await _call_cosyvoice_tts(text, None, str(ref_path), wav_path)
+    try:
+        if speaker_id.startswith(BUILTIN_PREFIX):
+            # 内置音色模式：传入预置音色名
+            builtin_spk = speaker_id[len(BUILTIN_PREFIX):]
+            await _call_cosyvoice_tts(text, builtin_spk, None, wav_path)
+        else:
+            # 克隆音色模式：以解析出的原始录音为参考
+            if not ref_audio_path or not Path(ref_audio_path).exists():
+                raise RuntimeError(
+                    "克隆参考录音缺失（raw_recording.wav 不存在），请重新完成声音克隆"
+                )
+            # 兼容本地遗留数据：扩展名为 .wav 但内容实为 webm 等格式时，
+            # 就地转码修复，避免推理服务解码失败
+            ref_path = await ensure_reference_wav(Path(ref_audio_path))
+            await _call_cosyvoice_tts(text, None, str(ref_path), wav_path)
 
-    # 统一转换为 24kHz 单声道 MP3（speed != 1.0 时做保音高变速）
-    await asyncio.to_thread(_wav_to_mp3, wav_path, mp3_path, speed)
-    wav_path.unlink(missing_ok=True)
+        # 统一转换为 24kHz 单声道 MP3（speed != 1.0 时做保音高变速）
+        await asyncio.to_thread(_wav_to_mp3, wav_path, mp3_path, speed)
+    finally:
+        # 失败路径同样清理临时 WAV：推理服务失败/转码失败时可能已写出
+        # 部分内容，长音频可达数十 MB，残留会随失败次数累积
+        wav_path.unlink(missing_ok=True)
     return get_public_url(project_id, "tts.mp3")
 
 

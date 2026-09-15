@@ -4,6 +4,7 @@
 将视频、TTS 音频、BGM 合并为最终视频并提供预览/下载。
 """
 
+import asyncio
 import traceback
 from pathlib import Path
 
@@ -28,9 +29,9 @@ router = APIRouter()
 @router.post("")
 async def merge_media(
     project_id: str = Form(...),
-    bgm_volume: float = Form(0.2),
-    fade_in: float = Form(1.0),
-    fade_out: float = Form(2.0),
+    bgm_volume: float = Form(0.2, ge=0.0, le=1.0),
+    fade_in: float = Form(1.0, ge=0.0, le=10.0),
+    fade_out: float = Form(2.0, ge=0.0, le=10.0),
     audio_mode: str = Form(AUDIO_MODE_REPLACE),
     force_merge: bool = Form(False),
     bgm: UploadFile | None = File(None),
@@ -45,6 +46,7 @@ async def merge_media(
     force_merge 指定音频超长时是否仍强制合并（默认 False：
     TTS 音频时长超过视频时长会先返回 400 提示，避免语音被
     静默截断导致内容丢失；确认知情后可传 True 强制截断合并）。
+    音量/淡入淡出参数均有范围约束，非法值直接返回 422。
     """
     result = await db.execute(select(Project).where(Project.id == project_id))
     project = result.scalar_one_or_none()
@@ -56,13 +58,18 @@ async def merge_media(
     if project.tts_status != "ready" or not project.tts_path:
         raise HTTPException(status_code=400, detail="TTS 音频尚未生成")
 
+    # 防重入：合并进行中拒绝重复提交，避免并发 FFmpeg 写同一 final.mp4
+    if project.merge_status == "generating":
+        raise HTTPException(status_code=409, detail="合并正在进行中，请等待完成")
+
     # 音频超长检测：合并以视频时长为准，超出的音频会被截断。
     # 未显式确认（force_merge）前先拦截，避免长配音被静默裁掉大半
     if not force_merge:
         video_file = get_project_file_path(project_id, "video.mp4")
         tts_file = get_project_file_path(project_id, "tts.mp3")
-        video_duration = get_media_duration(video_file)
-        tts_duration = get_media_duration(tts_file)
+        # ffprobe 为同步阻塞调用，放入线程避免冻结事件循环
+        video_duration = await asyncio.to_thread(get_media_duration, video_file)
+        tts_duration = await asyncio.to_thread(get_media_duration, tts_file)
         if video_duration > 0 and tts_duration > video_duration + 0.1:
             raise HTTPException(
                 status_code=400,
@@ -98,7 +105,9 @@ async def merge_media(
     await db.commit()
 
     try:
-        final_url = merge_final_video(
+        # FFmpeg 为同步阻塞长任务，放入线程避免合并期间冻结事件循环
+        final_url = await asyncio.to_thread(
+            merge_final_video,
             project_id=project_id,
             bgm_path=bgm_path,
             bgm_volume=bgm_volume,

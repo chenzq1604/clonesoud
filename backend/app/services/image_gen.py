@@ -8,6 +8,9 @@
 import asyncio
 import hashlib
 import httpx
+import re
+from pathlib import Path
+from urllib.parse import urlparse
 
 from app.config import settings
 from app.services.file_store import (
@@ -183,8 +186,9 @@ def _cleanup_candidate_images(project_id: str) -> None:
         project_id: 项目 ID。
     """
     project_dir = get_project_dir(project_id)
-    for old_file in project_dir.glob("image_*.png"):
-        old_file.unlink(missing_ok=True)
+    for pattern in ("image_*.png", "cand_tmp_*.png"):
+        for old_file in project_dir.glob(pattern):
+            old_file.unlink(missing_ok=True)
 
 
 async def generate_image(
@@ -226,20 +230,30 @@ async def generate_image(
     if not remote_urls:
         raise errors[0] if errors else RuntimeError("方舟文生图失败：未返回任何图片")
 
-    # 全部请求已成功（或至少一张成功），清理旧候选后下载新图
+    # 全部请求已成功（或至少一张成功）。先下载到临时名，任一张完整
+    # 落盘后才清理旧图并连续编号重命名——若先删旧图后下载，
+    # 下载全部失败时旧候选图已丢、新图一张都没有
+    downloaded: list[Path] = []
+    for idx, remote_url in enumerate(remote_urls):
+        tmp_path = get_project_file_path(project_id, f"cand_tmp_{idx}.png")
+        try:
+            await download_url_to_file(remote_url, tmp_path)
+            downloaded.append(tmp_path)
+        except Exception:
+            # 单张下载失败跳过，清理半成品后保留其余
+            tmp_path.unlink(missing_ok=True)
+
+    if not downloaded:
+        raise RuntimeError("候选图片全部下载失败")
+
+    # 至少一张新图已落盘：清理旧候选图，再连续编号（保证索引与文件名
+    # 一一对应，跳号会导致 /select 按索引选中时错位）
     _cleanup_candidate_images(project_id)
     urls = []
-    for idx, remote_url in enumerate(remote_urls):
-        local_path = get_project_file_path(project_id, f"image_{idx}.png")
-        try:
-            await download_url_to_file(remote_url, local_path)
-            urls.append(get_public_url(project_id, f"image_{idx}.png"))
-        except Exception:
-            # 单张下载失败跳过，保留其余
-            continue
-
-    if not urls:
-        raise RuntimeError("候选图片全部下载失败")
+    for new_idx, tmp_path in enumerate(downloaded):
+        final_path = get_project_file_path(project_id, f"image_{new_idx}.png")
+        tmp_path.replace(final_path)
+        urls.append(get_public_url(project_id, final_path.name))
     return urls
 
 
@@ -260,7 +274,12 @@ async def select_image(project_id: str, urls: list[str], selected_index: int) ->
     if selected_index < 0 or selected_index >= len(urls):
         raise ValueError("选中的图片索引无效")
 
-    selected_name = f"image_{selected_index}.png"
+    # 从选中 URL 解析真实文件名（而非按索引反拼 image_{index}.png）：
+    # 历史数据或异常场景下索引与文件名可能不对应，按索引拼接
+    # 会选错文件或直接 FileNotFoundError
+    selected_name = Path(urlparse(urls[selected_index]).path).name
+    if not re.fullmatch(r"image_\d+\.png", selected_name):
+        raise ValueError(f"非法的候选图片文件名: {selected_name}")
     target_path = get_project_file_path(project_id, "image.png")
     source_path = get_project_file_path(project_id, selected_name)
 

@@ -5,7 +5,7 @@
  */
 
 import { useState } from "react";
-import { api } from "../api";
+import { API_BASE, api } from "../api";
 import ProgressIndicator from "./ProgressIndicator";
 
 function MergePanel({ projectId, project, onStatusChange }) {
@@ -28,6 +28,7 @@ function MergePanel({ projectId, project, onStatusChange }) {
 
   /** 提交合并请求；force 为 true 时对音频超长强制截断合并 */
   const handleMerge = async (force = false) => {
+    if (loading) return; // 函数级守卫：按钮 disabled 有重渲染窗口
     if (!prerequisitesReady) {
       setMessage("语音或视频尚未就绪，请先完成前置步骤");
       return;
@@ -162,11 +163,11 @@ function MergePanel({ projectId, project, onStatusChange }) {
       {(previewUrl || (isReady && project?.final_video_path)) && (
         <div className="preview-area">
           <video
-            src={previewUrl || `http://127.0.0.1:8000${project.final_video_path}?t=${Date.now()}`}
+            src={previewUrl || `${API_BASE}${project.final_video_path}?t=${Date.now()}`}
             controls
           />
           <a
-            href={previewUrl || `http://127.0.0.1:8000${project.final_video_path}`}
+            href={previewUrl || `${API_BASE}${project.final_video_path}`}
             download
             className="btn-secondary"
           >

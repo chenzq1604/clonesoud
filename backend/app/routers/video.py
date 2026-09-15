@@ -169,6 +169,10 @@ async def generate_video(
         except FileNotFoundError as exc:
             raise HTTPException(status_code=400, detail=f"首帧图片文件缺失: {exc}")
 
+    # 防重入：生成进行中拒绝重复提交，避免分段文件与进度状态竞态
+    if project.video_status == "generating":
+        raise HTTPException(status_code=409, detail="视频正在生成中，请等待完成或稍后重试")
+
     project.video_status = "generating"
     project.video_prompt = data.prompt
     project.video_path = None

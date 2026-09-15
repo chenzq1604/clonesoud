@@ -290,11 +290,19 @@ def _synthesize(req: TTSRequest) -> dict:
 
 @app.post("/api/tts")
 async def synthesize(req: TTSRequest) -> dict:
-    """语音合成端点（线程池中执行并加锁串行）。"""
+    """语音合成端点（线程池中执行并加锁串行）。
+
+    锁的获取必须放入工作线程：threading.Lock.acquire() 是同步阻塞调用，
+    若在事件循环线程上直接 with _infer_lock，第二个请求会在等锁期间
+    卡死事件循环，导致持锁请求的完成回调永远无法调度，形成死锁。
+    """
     if _model is None:
         raise HTTPException(status_code=503, detail="模型尚未加载完成")
-    with _infer_lock:
+    await asyncio.to_thread(_infer_lock.acquire)
+    try:
         return await asyncio.to_thread(_synthesize, req)
+    finally:
+        _infer_lock.release()
 
 
 _MODEL_DIR = str(REPO_ROOT / "pretrained_models" / "Fun-CosyVoice3-0.5B-2512")

@@ -1,5 +1,7 @@
 # 音视频克隆生成系统（CloneMPEG）
 
+![version](https://img.shields.io/badge/version-v1.1-blue)
+
 基于 **CosyVoice3 本地语音克隆 + 火山方舟文生图 + ComfyUI Wan 2.2 本地视频生成** 的 Web 端音视频生成系统。
 
 录制一段自己的声音 → 输入文案生成配音 → 生成配图 → 生成长视频 → 合并为完整的"数字分身"视频，全流程在浏览器中完成。

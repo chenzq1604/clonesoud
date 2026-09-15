@@ -19,16 +19,17 @@ from app.routers import config, image, merge, projects, tts, video, voice
 
 async def _recover_orphan_video_tasks() -> int:
     """
-    启动时恢复遗留的"生成中"视频任务。
+    启动时恢复遗留的"生成中"任务（视频/语音/图片/合并四个阶段）。
 
     后端重启会杀死正在执行的生成协程，但项目状态仍停留在 generating，
-    前端会永远显示"生成中"且无任何进度。此处将其标记为失败并附
-    明确提示（重新提交即可断点续传，已完成分段不会重做）。
+    前端会永远显示"生成中"且无任何进度。此处将其标记为失败并附明确提示：
+    - 视频任务：重新提交即可断点续传，已完成分段不会重做；
+    - 其余阶段：为请求内同步执行的操作，重启即中断，直接提示重试。
 
     Returns:
-        恢复（标记失败）的项目数。
+        恢复（标记失败）的项目数（含任一阶段被恢复的项目）。
     """
-    recovered = 0
+    recovered_project_ids: set[str] = set()
     async with AsyncSessionLocal() as db:
         result = await db.execute(select(Project).where(Project.video_status == "generating"))
         for project in result.scalars():
@@ -39,10 +40,31 @@ async def _recover_orphan_video_tasks() -> int:
                 "请重新点击「生成视频」继续：参数不变时将自动断点续传，"
                 "已完成的分段不会重新生成。"
             )
-            recovered += 1
-        if recovered:
+            recovered_project_ids.add(project.id)
+
+        # TTS / 文生图 / 合并为请求内同步执行，重启必然中断，
+        # 若不恢复则状态永久停留在 generating（前端无限转圈）
+        result = await db.execute(select(Project).where(Project.tts_status == "generating"))
+        for project in result.scalars():
+            project.tts_status = "failed"
+            project.tts_error = "后端服务重启导致语音合成中断，请重新生成。"
+            recovered_project_ids.add(project.id)
+
+        result = await db.execute(select(Project).where(Project.image_status == "generating"))
+        for project in result.scalars():
+            project.image_status = "failed"
+            project.image_error = "后端服务重启导致图片生成中断，请重新生成。"
+            recovered_project_ids.add(project.id)
+
+        result = await db.execute(select(Project).where(Project.merge_status == "generating"))
+        for project in result.scalars():
+            project.merge_status = "failed"
+            project.merge_error = "后端服务重启导致合并中断，请重新合并。"
+            recovered_project_ids.add(project.id)
+
+        if recovered_project_ids:
             await db.commit()
-    return recovered
+    return len(recovered_project_ids)
 
 
 @asynccontextmanager

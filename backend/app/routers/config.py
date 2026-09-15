@@ -32,8 +32,8 @@ EDITABLE_FIELDS = {
     "demo_mode": "DEMO_MODE",
 }
 
-# .env 文件路径（app/config.py 的上两级即 backend 目录）
-ENV_FILE = Path(__file__).resolve().parent.parent / ".env"
+# .env 文件路径（本文件位于 backend/app/routers/，上三级即 backend 目录）
+ENV_FILE = Path(__file__).resolve().parent.parent.parent / ".env"
 
 
 def _mask_secret(value: str) -> str:

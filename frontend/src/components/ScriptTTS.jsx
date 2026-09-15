@@ -45,34 +45,54 @@ function ScriptTTS({ projectId, project, onStatusChange }) {
   const cloneVoices = voices.filter((v) => !v.is_builtin);
 
   /** 拉取音色列表（音色状态变化时刷新，以便新克隆音色出现） */
-  const loadVoices = async () => {
+  const loadVoices = async (signal) => {
     try {
       const list = await api.getVoices();
+      if (signal?.cancelled) return;
       setVoices(list);
     } catch (err) {
+      if (signal?.cancelled) return;
       setMessage(`获取音色列表失败: ${err.message}`);
     }
   };
 
   /** 拉取语音库列表 */
-  const loadLibrary = async () => {
+  const loadLibrary = async (signal) => {
     try {
       const list = await api.getTTSLibrary();
+      if (signal?.cancelled) return;
       setLibrary(list);
     } catch (err) {
+      if (signal?.cancelled) return;
       setMessage(`获取语音库失败: ${err.message}`);
     }
   };
 
-  /** 首次挂载与项目音色状态变化时刷新列表 */
+  /** 首次挂载与项目音色状态变化时刷新列表（带卸载取消守卫） */
   useEffect(() => {
-    loadVoices();
+    const signal = { cancelled: false };
+    loadVoices(signal);
+    return () => {
+      signal.cancelled = true;
+    };
   }, [project?.voice_status, project?.speaker_id]);
 
-  /** 首次挂载时加载语音库 */
+  /** 首次挂载时加载语音库（带卸载取消守卫） */
   useEffect(() => {
-    loadLibrary();
+    const signal = { cancelled: false };
+    loadLibrary(signal);
+    return () => {
+      signal.cancelled = true;
+    };
   }, []);
+
+  /** 页面刷新后回填后端保存的文案（组件挂载时 project 可能尚未加载完成） */
+  useEffect(() => {
+    if (project?.tts_text && !text) {
+      setText(project.tts_text);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [project?.tts_text]);
 
   /** 默认选中当前项目绑定的音色 */
   useEffect(() => {
@@ -146,6 +166,7 @@ function ScriptTTS({ projectId, project, onStatusChange }) {
 
   /** 提交文本进行 TTS 合成（带所选语速，成功后自动存入语音库） */
   const handleGenerate = async () => {
+    if (loading) return; // 函数级守卫：按钮 disabled 有重渲染窗口
     if (!text.trim()) {
       setMessage("请输入待合成的文本");
       return;

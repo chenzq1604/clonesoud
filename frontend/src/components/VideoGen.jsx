@@ -6,7 +6,7 @@
  */
 
 import { useRef, useState } from "react";
-import { api } from "../api";
+import { API_BASE, api } from "../api";
 import ProgressIndicator from "./ProgressIndicator";
 
 /** 三种互斥的视频来源方式定义 */
@@ -155,6 +155,7 @@ function VideoGen({ projectId, project, onStatusChange }) {
 
   /** 提交文生视频 / 图生视频任务 */
   const handleGenerate = async () => {
+    if (loading) return; // 函数级守卫：按钮 disabled 有重渲染窗口
     if (!prompt.trim()) {
       setMessage("请输入视频内容描述");
       return;
@@ -191,6 +192,7 @@ function VideoGen({ projectId, project, onStatusChange }) {
 
   /** 上传本地已生成好的视频，作为项目视频产物 */
   const handleUpload = async () => {
+    if (uploading) return; // 函数级守卫：按钮 disabled 有重渲染窗口
     if (!uploadFile) {
       setMessage("请先选择一个本地视频文件");
       return;
@@ -383,7 +385,7 @@ function VideoGen({ projectId, project, onStatusChange }) {
       {isReady && project?.video_path && (
         <div className="result-info">
           <strong>视频已就绪</strong>
-          <video src={`http://127.0.0.1:8000${project.video_path}`} controls />
+          <video src={`${API_BASE}${project.video_path}`} controls />
         </div>
       )}
 

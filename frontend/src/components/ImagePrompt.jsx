@@ -5,7 +5,7 @@
  */
 
 import { useEffect, useState } from "react";
-import { api } from "../api";
+import { API_BASE, api } from "../api";
 import ProgressIndicator from "./ProgressIndicator";
 
 /**
@@ -46,6 +46,7 @@ function ImagePrompt({ projectId, project, onStatusChange }) {
 
   /** 提交提示词生成图片（已有图片时即为重新生成，旧候选图会被后端清理） */
   const handleGenerate = async () => {
+    if (loading) return; // 函数级守卫：按钮 disabled 有重渲染窗口
     if (!prompt.trim()) {
       setMessage("请输入图片提示词");
       return;
@@ -70,6 +71,7 @@ function ImagePrompt({ projectId, project, onStatusChange }) {
 
   /** 确认选中的图片 */
   const handleSelect = async () => {
+    if (loading) return; // 函数级守卫：按钮 disabled 有重渲染窗口
     if (images.length === 0) return;
 
     setLoading(true);
@@ -130,7 +132,7 @@ function ImagePrompt({ projectId, project, onStatusChange }) {
           {images.map((url, index) => (
             <img
               key={index}
-              src={`http://127.0.0.1:8000${url}`}
+              src={`${API_BASE}${url}`}
               alt={`生成图片 ${index + 1}`}
               className={selectedIndex === index ? "selected" : ""}
               onClick={() => setSelectedIndex(index)}
@@ -149,7 +151,7 @@ function ImagePrompt({ projectId, project, onStatusChange }) {
       {previewUrl && (
         <div className="image-lightbox" onClick={() => setPreviewUrl(null)}>
           <img
-            src={`http://127.0.0.1:8000${previewUrl}`}
+            src={`${API_BASE}${previewUrl}`}
             alt="大图预览"
             onClick={(e) => e.stopPropagation()}
           />
@@ -177,7 +179,7 @@ function ImagePrompt({ projectId, project, onStatusChange }) {
       {isReady && project?.image_path && (
         <div className="result-info">
           <strong>图片已就绪</strong>
-          <img src={`http://127.0.0.1:8000${project.image_path}`} alt="选中的图片" />
+          <img src={`${API_BASE}${project.image_path}`} alt="选中的图片" />
         </div>
       )}
 

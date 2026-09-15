@@ -36,6 +36,20 @@ from app.services.file_store import (
     get_project_file_path,
     get_public_url,
 )
+from app.services.media_merge import get_media_duration
+
+# 进程级"进行中视频生成任务"注册表（project_id 集合）。
+# ComfyUI 清场（interrupt + 清队列）无法区分"上次崩溃的遗留任务"与
+# "本后端另一项目正在执行的任务"：项目 A 生成中时，项目 B 若无条件
+# 清场会中断 A 的任务。清场前必须确认没有其他活跃任务。
+_active_generations: set[str] = set()
+
+
+def has_active_generations(exclude_project_id: str | None = None) -> bool:
+    """查询是否存在进行中的视频生成任务（可排除指定项目）。"""
+    if exclude_project_id is None:
+        return bool(_active_generations)
+    return any(pid != exclude_project_id for pid in _active_generations)
 
 # Wan 2.2 5B TI2V 默认生成规格（模型训练规格，出处：ComfyUI 官方模板
 # video_wan2_2_5B_ti2v.json）：1280x704、121 帧、24fps ≈ 5 秒
@@ -626,6 +640,24 @@ def _generate_placeholder_video(
     return get_public_url(project_id, "video.mp4")
 
 
+def _tail_seek_offset(video_path: Path) -> float:
+    """计算尾帧提取的回溯偏移秒数（不超过 1 秒，且不超过片长的 90%）。
+
+    Args:
+        video_path: 视频文件路径。
+
+    Returns:
+        回溯偏移（秒），探测失败时回退 1 秒。
+    """
+    try:
+        duration = get_media_duration(video_path)
+    except Exception:
+        duration = 0.0
+    if duration and duration > 0:
+        return max(0.05, min(1.0, duration * 0.9))
+    return 1.0
+
+
 def _extract_last_frame(video_path: Path, output_png: Path) -> Path:
     """
     提取视频的最后一帧保存为 PNG（用于分段续写的首帧）。
@@ -642,7 +674,10 @@ def _extract_last_frame(video_path: Path, output_png: Path) -> Path:
     """
     cmd = [
         "ffmpeg", "-y",
-        "-sseof", "-1",  # 从结尾前 1 秒开始解码，配合 -update 取最后一帧
+        # 从结尾前一段时间开始解码，配合 -update 取最后一帧。
+        # 偏移按实际时长动态取（90% 时长且不超过 1 秒）：末段可能不足
+        # 1 秒，固定 -sseof -1 会被钳制到文件开头而提取到首帧
+        "-sseof", f"-{_tail_seek_offset(video_path):.3f}",
         "-i", str(video_path),
         "-update", "1",
         "-frames:v", "1",
@@ -867,6 +902,28 @@ async def generate_video_with_comfyui(
     Returns:
         项目内 video.mp4 的对外本地 URL。
     """
+    # 注册活跃任务：供其他项目/路由判断是否可以安全清场 ComfyUI
+    _active_generations.add(project_id)
+    try:
+        return await _generate_video_impl(
+            project_id, prompt, image_path,
+            width, height, fps, duration, progress_cb,
+        )
+    finally:
+        _active_generations.discard(project_id)
+
+
+async def _generate_video_impl(
+    project_id: str,
+    prompt: str,
+    image_path: Path | None,
+    width: int,
+    height: int,
+    fps: int,
+    duration: float,
+    progress_cb: Optional[Callable[[dict], Awaitable[None]]] = None,
+) -> str:
+    """视频生成主流程实现（由 generate_video_with_comfyui 包装并注册活跃任务）。"""
     # 演示模式：不依赖 ComfyUI，直接生成本地占位视频
     if settings.demo_mode:
         return await asyncio.to_thread(
@@ -880,13 +937,16 @@ async def generate_video_with_comfyui(
         )
 
     # 清场：中断上次运行遗留的旧任务并清空队列。
-    # ComfyUI 单任务串行，残留旧任务会让本次任务一直排队（进度卡 0 直至超时）
-    stale_running, stale_pending = await clear_comfyui_stale_tasks()
-    if stale_running or stale_pending:
-        logging.getLogger(__name__).warning(
-            "已清理 ComfyUI 遗留任务：中断运行中 %d 个，清空排队 %d 个",
-            stale_running, stale_pending,
-        )
+    # ComfyUI 单任务串行，残留旧任务会让本次任务一直排队（进度卡 0 直至超时）。
+    # 若本后端其他项目正在生成（注册表非空），说明队列中的任务并非"遗留"，
+    # 跳过清场以免中断他人任务
+    if not has_active_generations(exclude_project_id=project_id):
+        stale_running, stale_pending = await clear_comfyui_stale_tasks()
+        if stale_running or stale_pending:
+            logging.getLogger(__name__).warning(
+                "已清理 ComfyUI 遗留任务：中断运行中 %d 个，清空排队 %d 个",
+                stale_running, stale_pending,
+            )
 
     # 单段最大帧数（预算内）与对应时长
     seg_length = compute_video_length(999, fps, width, height)
@@ -906,7 +966,18 @@ async def generate_video_with_comfyui(
         # 续传：当前首帧为已完成段的尾帧
         current_image = get_project_file_path(project_id, f"seg_tail_{resumed}.png")
         if not current_image.exists():
-            resumed = 0  # 尾帧缺失无法续写画面，退回全新生成
+            # 尾帧缺失（提取失败/服务重启）：从上一段视频现场重新提取，
+            # 避免将已完成的全部 GPU 分段推倒重来
+            prev_seg = get_project_file_path(project_id, f"video_seg_{resumed - 1}.mp4")
+            try:
+                if not _segment_file_valid(prev_seg):
+                    raise FileNotFoundError(f"上一段视频文件无效: {prev_seg}")
+                await asyncio.to_thread(_extract_last_frame, prev_seg, current_image)
+            except Exception:
+                logging.getLogger(__name__).warning(
+                    "续传尾帧缺失且重新提取失败，退回全新生成", exc_info=True
+                )
+                resumed = 0
     if resumed == 0:
         _cleanup_segment_files(project_id)  # 清掉不匹配的旧段
         # 删除旧的成功产物：避免失败后 finally 误判"已成功"而清掉本次分段
@@ -945,15 +1016,18 @@ async def generate_video_with_comfyui(
                 seg_idx, total_segments,
                 on_seg_progress=_on_seg_progress,
             )
-            _save_segments_state(project_id, params, total_segments, seg_idx + 1)
 
-            # 还有后续段：提取本段尾帧作为下一段首帧，保持画面衔接
+            # 先提取尾帧、成功后再写入续传清单：若先写清单后提取失败，
+            # 下次续传会因尾帧缺失误判而清掉全部已完成段从头重做
             if seg_idx + 1 < total_segments:
+                # 还有后续段：提取本段尾帧作为下一段首帧，保持画面衔接
                 tail_png = get_project_file_path(project_id, f"seg_tail_{seg_idx + 1}.png")
                 await asyncio.to_thread(_extract_last_frame, seg_path, tail_png)
                 current_image = tail_png
+                _save_segments_state(project_id, params, total_segments, seg_idx + 1)
                 await _report(seg_idx + 1, 0.0)
             else:
+                _save_segments_state(project_id, params, total_segments, seg_idx + 1)
                 await _report(seg_idx + 1, 1.0)
 
         # 收集全部分段路径（含续传复用的已完成段）

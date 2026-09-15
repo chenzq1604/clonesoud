@@ -4,6 +4,7 @@
 根据提示词生成一组图片，并支持选择其中一张作为后续视频首帧。
 """
 
+import re
 import traceback
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -35,6 +36,10 @@ async def generate_image_route(data: ImageGenerateRequest, db: AsyncSession = De
     if not project:
         raise HTTPException(status_code=404, detail="项目不存在")
 
+    # 防重入：生成进行中拒绝重复提交，避免候选图文件互相覆盖
+    if project.image_status == "generating":
+        raise HTTPException(status_code=409, detail="图片正在生成中，请等待完成")
+
     project.image_status = "generating"
     project.image_prompt = data.prompt
     await db.commit()
@@ -65,9 +70,15 @@ async def select_image_route(data: ImageSelectRequest, db: AsyncSession = Depend
     if not project:
         raise HTTPException(status_code=404, detail="项目不存在")
 
-    # 动态扫描项目目录下已生成的图片文件
+    # 动态扫描项目目录下已生成的图片文件（按编号数字序，
+    # 避免 image_10.png 在字符串排序下跑到 image_2.png 前面）
     project_dir = get_project_dir(data.project_id)
-    image_files = sorted(project_dir.glob("image_*.png"))
+
+    def _numeric_key(path):
+        m = re.search(r"image_(\d+)\.png$", path.name)
+        return int(m.group(1)) if m else 0
+
+    image_files = sorted(project_dir.glob("image_*.png"), key=_numeric_key)
     urls = [f"/uploads/{data.project_id}/{f.name}" for f in image_files]
     try:
         selected_url = await select_image(data.project_id, urls, data.selected_index)
