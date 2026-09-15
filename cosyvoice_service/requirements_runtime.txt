@@ -1,0 +1,33 @@
+# CosyVoice3 Windows 推理环境依赖（从官方 requirements.txt 过滤）
+# 移除：pyworld（仅训练使用，Windows 无预编译包）、gradio（仅 webui 演示）、
+#       训练相关大包（lightning/tensorboard/pyarrow/diffusers/matplotlib/gdown/wget）
+--extra-index-url https://download.pytorch.org/whl/cu121
+conformer==0.3.2
+fastapi==0.115.6
+fastapi-cli==0.0.4
+grpcio==1.57.0
+hydra-core==1.3.2
+HyperPyYAML==1.2.3
+inflect==7.3.1
+librosa==0.10.2
+modelscope==1.20.0
+networkx==3.1
+numpy==1.26.4
+omegaconf==2.3.0
+onnx==1.16.0
+onnxruntime==1.18.0
+protobuf==4.25
+pydantic==2.7.0
+rich==13.7.1
+soundfile==0.12.1
+torch==2.3.1
+torchaudio==2.3.1
+transformers==4.51.3
+uvicorn==0.30.0
+wetext==0.0.4
+httpx
+# DiT 模块依赖（x_transformers 及其缺失子依赖，--no-deps 安装避免升级 torch）
+x-transformers==2.11.24
+einx==0.4.3
+loguru==0.7.3
+frozendict==2.4.7

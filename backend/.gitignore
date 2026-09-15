@@ -1,0 +1,15 @@
+.env
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.db
+*.sqlite3
+.pytest_cache/
+.mypy_cache/
+.venv/
+env/
+venv/
+# pytest 生成的测试音频（conftest 用 ffmpeg 生成）
+tests/_test_voice.wav

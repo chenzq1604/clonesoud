@@ -1,0 +1,29 @@
+{
+  "voices": [
+    {
+      "id": "xiaoxiao",
+      "name": "晓晓（女声·温柔）",
+      "file": "xiaoxiao.wav"
+    },
+    {
+      "id": "xiaoyi",
+      "name": "晓伊（女声·甜美）",
+      "file": "xiaoyi.wav"
+    },
+    {
+      "id": "yunxi",
+      "name": "云希（男声·阳光）",
+      "file": "yunxi.wav"
+    },
+    {
+      "id": "yunjian",
+      "name": "云健（男声·浑厚）",
+      "file": "yunjian.wav"
+    },
+    {
+      "id": "yunyang",
+      "name": "云扬（男声·播音）",
+      "file": "yunyang.wav"
+    }
+  ]
+}
